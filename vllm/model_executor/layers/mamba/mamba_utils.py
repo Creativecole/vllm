@@ -21,6 +21,22 @@ from vllm.utils.torch_utils import (
 logger = init_logger(__name__)
 
 ConvStateLayoutType = Literal["SD", "DS"]
+FP8_SSM_STATE_DTYPES = frozenset({torch.float8_e4m3fn})
+
+
+def quantize_scaled(
+    state: torch.Tensor, dtype: torch.dtype
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Quantize each contiguous last-dimension row with a dynamic scale."""
+    if dtype not in FP8_SSM_STATE_DTYPES:
+        raise ValueError(f"Unsupported scaled quantization dtype: {dtype}")
+
+    state_fp32 = state.float()
+    amax = state_fp32.abs().amax(dim=-1, keepdim=True)
+    quant_max = torch.finfo(dtype).max
+    scale = torch.where(amax == 0, torch.ones_like(amax), amax / quant_max)
+    quantized = (state_fp32 / scale).to(dtype)
+    return quantized, scale
 
 
 @functools.lru_cache
@@ -122,10 +138,11 @@ class MambaStateDtypeCalculator:
         model_dtype: ModelDType | torch.dtype,
         mamba_cache_dtype: MambaDType,
         mamba_ssm_cache_dtype: MambaDType = "auto",
-    ) -> tuple[torch.dtype, torch.dtype]:
-        return cls._mamba_state_dtype(
+    ) -> tuple[torch.dtype, torch.dtype, torch.dtype]:
+        state_dtypes = cls._mamba_state_dtype(
             model_dtype, mamba_cache_dtype, mamba_ssm_cache_dtype
         )
+        return (*state_dtypes, torch.float32)
 
     @classmethod
     def kda_state_dtype(
@@ -253,7 +270,7 @@ class MambaStateShapeCalculator:
         head_v_dim: int,
         conv_kernel_size: int,
         num_spec: int = 0,
-    ):
+    ) -> tuple[tuple[int, int], tuple[int, int, int], tuple[int, int, int]]:
         conv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads
         conv_state_shape = cls._orient_conv_shape(
             divide(conv_dim, tp_world_size),
@@ -265,7 +282,12 @@ class MambaStateShapeCalculator:
             head_v_dim,
             head_k_dim,
         )
-        return conv_state_shape, temporal_state_shape
+        temporal_state_scale_shape = (
+            divide(num_v_heads, tp_world_size),
+            head_v_dim,
+            1,
+        )
+        return conv_state_shape, temporal_state_shape, temporal_state_scale_shape
 
     @classmethod
     def kda_state_shape(
@@ -384,7 +406,7 @@ class MambaStateCopyFuncCalculator:
 
     @classmethod
     def gated_delta_net_state_copy_func(cls):
-        return (get_conv_copy_spec, get_temporal_copy_spec)
+        return (get_conv_copy_spec, get_temporal_copy_spec, get_temporal_copy_spec)
 
     @classmethod
     def kda_state_copy_func(cls):

@@ -29,8 +29,10 @@ from vllm.model_executor.layers.linear import (
 from vllm.model_executor.layers.mamba.gdn.base import GatedDeltaNetAttention
 from vllm.model_executor.layers.mamba.mamba_mixer2 import mamba_v2_sharded_weight_loader
 from vllm.model_executor.layers.mamba.mamba_utils import (
+    FP8_SSM_STATE_DTYPES,
     MambaStateShapeCalculator,
     is_conv_state_dim_first,
+    quantize_scaled,
 )
 from vllm.model_executor.layers.mamba.ops.causal_conv1d import (
     causal_conv1d_fn,
@@ -80,6 +82,59 @@ if GDN_AITER_TRITON_AVAILABLE:
     )
 
 logger = init_logger(__name__)
+
+
+def _prepare_fp8_prefill_initial_state(
+    ssm_state: torch.Tensor,
+    ssm_state_scales: torch.Tensor,
+    state_indices: torch.Tensor,
+    has_initial_state: torch.Tensor,
+) -> torch.Tensor:
+    initial_state = torch.zeros(
+        (state_indices.shape[0], *ssm_state.shape[1:]),
+        dtype=torch.float32,
+        device=ssm_state.device,
+    )
+    valid_positions = torch.nonzero(
+        has_initial_state & (state_indices > 0), as_tuple=True
+    )[0]
+    if valid_positions.numel() == 0:
+        return initial_state
+
+    active_state_indices = state_indices.index_select(0, valid_positions).long()
+    active_state = ssm_state.index_select(0, active_state_indices).float()
+    active_state.mul_(ssm_state_scales.index_select(0, active_state_indices).float())
+    initial_state.index_copy_(0, valid_positions, active_state)
+    return initial_state
+
+
+def _prepare_fp8_packed_decode_state(
+    ssm_state: torch.Tensor,
+    ssm_state_scales: torch.Tensor,
+    state_indices: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    valid_state_mask = state_indices > 0
+    active_state_indices = state_indices[valid_state_mask].long()
+    num_active = active_state_indices.numel()
+    scratch_state = torch.zeros(
+        (num_active + 1, *ssm_state.shape[1:]),
+        dtype=torch.float32,
+        device=ssm_state.device,
+    )
+    kernel_state_indices = torch.full_like(state_indices, -1)
+    if num_active == 0:
+        return scratch_state, kernel_state_indices, active_state_indices
+
+    active_state = ssm_state.index_select(0, active_state_indices).float()
+    active_state.mul_(ssm_state_scales.index_select(0, active_state_indices).float())
+    scratch_state[1:].copy_(active_state)
+    kernel_state_indices[valid_state_mask] = torch.arange(
+        1,
+        num_active + 1,
+        dtype=state_indices.dtype,
+        device=state_indices.device,
+    )
+    return scratch_state, kernel_state_indices, active_state_indices
 
 
 def _resolve_gdn_prefill_backend(
@@ -342,7 +397,7 @@ class ChunkGatedDeltaRule(CustomOp):
 class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
     def get_state_shape(
         self,
-    ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    ) -> tuple[tuple[int, ...], ...]:
         return MambaStateShapeCalculator.gated_delta_net_state_shape(
             self.tp_size,
             self.num_k_heads,
@@ -1018,7 +1073,9 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
         dtype = qkv_or_qkvz.dtype
         num_k_heads = self.num_k_heads // self.tp_size
         num_v_heads = self.num_v_heads // self.tp_size
-        _, state_dtype = self.get_state_dtype()
+        _, state_dtype, _ = self.get_state_dtype()
+        if state_dtype in FP8_SSM_STATE_DTYPES:
+            state_dtype = torch.float32
 
         # All kernels use BT = chunk_size, so a single pass with T = chunk_size
         # is sufficient to populate every autotuner cache. Mirror the real
@@ -1147,6 +1204,9 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
         attn_metadata = attn_metadata_raw[self.prefix]  # type: ignore[index]
         assert isinstance(attn_metadata, GDNAttentionMetadata)
 
+        if self.kv_cache[1].dtype in FP8_SSM_STATE_DTYPES:
+            raise NotImplementedError("FP8 GDN state cache is only supported on CUDA")
+
         # The AITER fused reshape/conv kernel expects Qwen3-Next's interleaved
         # GQA layout. Qwen3.5 uses a non-interleaved q/k/v/z layout and must use
         # the generic path below to split/rearrange inputs correctly.
@@ -1203,6 +1263,24 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
         attn_metadata = attn_metadata_raw[self.prefix]  # type: ignore[index]
         assert isinstance(attn_metadata, GDNAttentionMetadata)
 
+        ssm_state_is_fp8 = self.kv_cache[1].dtype in FP8_SSM_STATE_DTYPES
+        if ssm_state_is_fp8:
+            if attn_metadata.spec_sequence_masks is not None:
+                raise NotImplementedError(
+                    "FP8 GDN state cache does not support speculative decode"
+                )
+            if attn_metadata.num_prefills > 0 and attn_metadata.num_decodes > 0:
+                raise NotImplementedError(
+                    "FP8 GDN state cache does not support mixed prefill and decode"
+                )
+            if (
+                attn_metadata.num_decodes > 0
+                and not self.enable_packed_recurrent_decode
+            ):
+                raise NotImplementedError(
+                    "FP8 GDN state cache requires packed non-spec decode"
+                )
+
         if (
             self.enable_packed_recurrent_decode
             and attn_metadata.spec_sequence_masks is None
@@ -1234,6 +1312,7 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
             else self_kv_cache[0].transpose(-1, -2)
         )
         ssm_state = self_kv_cache[1]
+        ssm_state_scales = self_kv_cache[2]
         num_actual_tokens = attn_metadata.num_actual_tokens
         num_accepted_tokens = attn_metadata.num_accepted_tokens
 
@@ -1430,8 +1509,16 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
             prefill_has_initial_state = attn_metadata.prefill_has_initial_state
             assert prefill_state_indices is not None
             assert prefill_has_initial_state is not None
-            initial_state = ssm_state[prefill_state_indices]
-            initial_state[~prefill_has_initial_state, ...] = 0
+            if ssm_state_is_fp8:
+                initial_state = _prepare_fp8_prefill_initial_state(
+                    ssm_state,
+                    ssm_state_scales,
+                    prefill_state_indices,
+                    prefill_has_initial_state,
+                )
+            else:
+                initial_state = ssm_state[prefill_state_indices]
+                initial_state[~prefill_has_initial_state, ...] = 0
             (
                 core_attn_out_non_spec,
                 last_recurrent_state,
@@ -1449,7 +1536,16 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
                 use_qk_l2norm_in_kernel=False,
             )
             # Init cache
-            ssm_state[prefill_state_indices] = last_recurrent_state.to(ssm_state.dtype)
+            if ssm_state_is_fp8:
+                quantized_state, state_scales = quantize_scaled(
+                    last_recurrent_state, ssm_state.dtype
+                )
+                ssm_state[prefill_state_indices] = quantized_state
+                ssm_state_scales[prefill_state_indices] = state_scales
+            else:
+                ssm_state[prefill_state_indices] = last_recurrent_state.to(
+                    ssm_state.dtype
+                )
 
             if split_non_spec:
                 # Stitch the peeled decode outputs in front of the prefill
@@ -1582,6 +1678,7 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
             else self_kv_cache[0].transpose(-1, -2)
         )
         ssm_state = self_kv_cache[1]
+        ssm_state_scales = self_kv_cache[2]
         num_actual_tokens = attn_metadata.num_actual_tokens
 
         mixed_qkv = mixed_qkv[:num_actual_tokens]
@@ -1601,6 +1698,22 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
             validate_data=False,
         )
         out_buf = core_attn_out[:num_actual_tokens].unsqueeze(1)
+        state_indices = non_spec_state_indices_tensor[:num_actual_tokens]
+        ssm_state_is_fp8 = ssm_state.dtype in FP8_SSM_STATE_DTYPES
+        if ssm_state_is_fp8:
+            (
+                active_ssm_state,
+                kernel_state_indices,
+                active_state_indices,
+            ) = _prepare_fp8_packed_decode_state(
+                ssm_state,
+                ssm_state_scales,
+                state_indices,
+            )
+        else:
+            active_ssm_state = ssm_state
+            kernel_state_indices = state_indices
+
         fused_recurrent_gated_delta_rule_packed_decode(
             mixed_qkv=mixed_qkv_non_spec,
             a=a,
@@ -1608,11 +1721,19 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
             A_log=self.A_log,
             dt_bias=self.dt_bias,
             scale=self.head_k_dim**-0.5,
-            initial_state=ssm_state,
+            initial_state=active_ssm_state,
             out=out_buf,
-            ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],  # type: ignore[index]
+            ssm_state_indices=kernel_state_indices,
             use_qk_l2norm_in_kernel=True,
         )
+        if ssm_state_is_fp8:
+            active_ssm_state = active_ssm_state[1:]
+            if active_state_indices.numel() > 0:
+                quantized_state, state_scales = quantize_scaled(
+                    active_ssm_state, ssm_state.dtype
+                )
+                ssm_state.index_copy_(0, active_state_indices, quantized_state)
+                ssm_state_scales.index_copy_(0, active_state_indices, state_scales)
         return
 
 

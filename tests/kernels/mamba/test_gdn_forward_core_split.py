@@ -120,7 +120,10 @@ def _build_layer(
     layer.A_log = A_log
     layer.dt_bias = dt_bias
     layer.conv1d = types.SimpleNamespace(weight=conv_weight, bias=conv_bias)
-    layer.kv_cache = (conv_state, ssm_state)
+    ssm_state_scales = torch.ones(
+        *ssm_state.shape[:-1], 1, dtype=torch.float32, device=ssm_state.device
+    )
+    layer.kv_cache = (conv_state, ssm_state, ssm_state_scales)
     with set_current_vllm_config(vllm_config):
         layer.chunk_gated_delta_rule = ChunkGatedDeltaRule()
     for name in (
@@ -232,7 +235,7 @@ def test_forward_core_split_matches_unified(
     # Size the state pools from the indices the builder actually produced.
     assert meta_split.non_spec_state_indices_tensor is not None
     pool_size = int(meta_split.non_spec_state_indices_tensor.max().item()) + 1
-    conv_state_shape, temporal_state_shape = (
+    conv_state_shape, temporal_state_shape, _ = (
         MambaStateShapeCalculator.gated_delta_net_state_shape(
             1, H, HV, K, V, CONV_KERNEL, num_spec=0
         )
