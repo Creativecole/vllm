@@ -4,6 +4,7 @@
 import pytest
 import torch
 
+from vllm.model_executor.layers.mamba.mamba_utils import quantize_scaled
 from vllm.third_party.flash_linear_attention.ops import (
     fused_recurrent_gated_delta_rule,
     fused_recurrent_gated_delta_rule_packed_decode,
@@ -100,3 +101,108 @@ def test_fused_recurrent_packed_decode_matches_reference(
     valid = ssm_state_indices > 0
     torch.testing.assert_close(out_packed[valid], out_ref[valid], rtol=rtol, atol=atol)
     torch.testing.assert_close(state_packed, state_ref, rtol=rtol, atol=atol)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.version.hip is not None,
+    reason="Need NVIDIA CUDA device",
+)
+def test_fused_recurrent_packed_decode_fp8_state_matches_fp32_reference():
+    torch.manual_seed(0)
+
+    B = 6
+    H = 2
+    HV = 4
+    K = 128
+    V = 128
+    num_states = 8
+    qkv_dim = 2 * H * K + HV * V
+    device = torch.device("cuda")
+    activation_dtype = torch.bfloat16
+
+    mixed_qkv = torch.randn((B, qkv_dim), device=device, dtype=activation_dtype)
+    value_row_zero_offsets = 2 * H * K + torch.arange(HV, device=device) * V
+    mixed_qkv[:, value_row_zero_offsets] = 0
+    a = torch.randn((B, HV), device=device, dtype=activation_dtype)
+    b = torch.randn((B, HV), device=device, dtype=activation_dtype)
+    A_log = torch.randn((HV,), device=device, dtype=torch.float32)
+    dt_bias = torch.randn((HV,), device=device, dtype=torch.float32)
+    state_indices = torch.tensor([1, 3, 0, -1, 5, 6], device=device, dtype=torch.int32)
+
+    initial_state = (
+        torch.randn((num_states, HV, V, K), device=device, dtype=torch.float32) * 0.05
+    )
+    initial_state[:, :, 0, :] = 0
+    state_fp8, state_scales = quantize_scaled(initial_state, torch.float8_e4m3fn)
+    state_fp8_before = state_fp8.view(torch.uint8).clone()
+    state_scales_before = state_scales.clone()
+    state_ref = state_fp8.float() * state_scales
+
+    out_ref = torch.empty((B, 1, HV, V), device=device, dtype=activation_dtype)
+    out_fp8 = torch.empty_like(out_ref)
+    fused_recurrent_gated_delta_rule_packed_decode(
+        mixed_qkv=mixed_qkv,
+        a=a,
+        b=b,
+        A_log=A_log,
+        dt_bias=dt_bias,
+        scale=K**-0.5,
+        initial_state=state_ref,
+        out=out_ref,
+        ssm_state_indices=state_indices,
+        use_qk_l2norm_in_kernel=True,
+    )
+    fused_recurrent_gated_delta_rule_packed_decode(
+        mixed_qkv=mixed_qkv,
+        a=a,
+        b=b,
+        A_log=A_log,
+        dt_bias=dt_bias,
+        scale=K**-0.5,
+        initial_state=state_fp8,
+        out=out_fp8,
+        ssm_state_indices=state_indices,
+        ssm_state_scales=state_scales,
+        use_qk_l2norm_in_kernel=True,
+    )
+
+    valid = state_indices > 0
+    active_state_indices = state_indices[valid].long()
+    expected_state, expected_scales = quantize_scaled(
+        state_ref.index_select(0, active_state_indices), torch.float8_e4m3fn
+    )
+
+    torch.testing.assert_close(out_fp8[valid], out_ref[valid], rtol=1e-2, atol=2e-2)
+    torch.testing.assert_close(
+        out_fp8[~valid], torch.zeros_like(out_fp8[~valid]), rtol=0, atol=0
+    )
+    assert torch.equal(
+        state_fp8.index_select(0, active_state_indices).view(torch.uint8),
+        expected_state.view(torch.uint8),
+    )
+    torch.testing.assert_close(
+        state_scales.index_select(0, active_state_indices),
+        expected_scales,
+        rtol=1e-6,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        state_scales[active_state_indices, :, 0, 0],
+        torch.ones_like(state_scales[active_state_indices, :, 0, 0]),
+        rtol=0,
+        atol=0,
+    )
+
+    untouched_state_indices = torch.tensor(
+        [0, 2, 4, 7], device=device, dtype=torch.int64
+    )
+    assert torch.equal(
+        state_fp8.view(torch.uint8).index_select(0, untouched_state_indices),
+        state_fp8_before.index_select(0, untouched_state_indices),
+    )
+    torch.testing.assert_close(
+        state_scales.index_select(0, untouched_state_indices),
+        state_scales_before.index_select(0, untouched_state_indices),
+        rtol=0,
+        atol=0,
+    )

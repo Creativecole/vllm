@@ -124,35 +124,6 @@ def _prepare_fp8_prefill_initial_state(
     return initial_state
 
 
-def _prepare_fp8_packed_decode_state(
-    ssm_state: torch.Tensor,
-    ssm_state_scales: torch.Tensor,
-    state_indices: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    valid_state_mask = state_indices > 0
-    active_state_indices = state_indices[valid_state_mask].long()
-    num_active = active_state_indices.numel()
-    scratch_state = torch.zeros(
-        (num_active + 1, *ssm_state.shape[1:]),
-        dtype=torch.float32,
-        device=ssm_state.device,
-    )
-    kernel_state_indices = torch.full_like(state_indices, -1)
-    if num_active == 0:
-        return scratch_state, kernel_state_indices, active_state_indices
-
-    active_state = ssm_state.index_select(0, active_state_indices).float()
-    active_state.mul_(ssm_state_scales.index_select(0, active_state_indices).float())
-    scratch_state[1:].copy_(active_state)
-    kernel_state_indices[valid_state_mask] = torch.arange(
-        1,
-        num_active + 1,
-        dtype=state_indices.dtype,
-        device=state_indices.device,
-    )
-    return scratch_state, kernel_state_indices, active_state_indices
-
-
 def _resolve_gdn_prefill_backend(
     vllm_config: VllmConfig,
 ) -> tuple[str, Literal["triton", "flashinfer", "cutedsl"]]:
@@ -1718,19 +1689,6 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
         out_buf = core_attn_out[:num_actual_tokens].unsqueeze(1)
         state_indices = non_spec_state_indices_tensor[:num_actual_tokens]
         ssm_state_is_fp8 = ssm_state.dtype in FP8_SSM_STATE_DTYPES
-        if ssm_state_is_fp8:
-            (
-                active_ssm_state,
-                kernel_state_indices,
-                active_state_indices,
-            ) = _prepare_fp8_packed_decode_state(
-                ssm_state,
-                ssm_state_scales,
-                state_indices,
-            )
-        else:
-            active_ssm_state = ssm_state
-            kernel_state_indices = state_indices
 
         fused_recurrent_gated_delta_rule_packed_decode(
             mixed_qkv=mixed_qkv_non_spec,
@@ -1739,19 +1697,12 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
             A_log=self.A_log,
             dt_bias=self.dt_bias,
             scale=self.head_k_dim**-0.5,
-            initial_state=active_ssm_state,
+            initial_state=ssm_state,
             out=out_buf,
-            ssm_state_indices=kernel_state_indices,
+            ssm_state_indices=state_indices,
+            ssm_state_scales=ssm_state_scales if ssm_state_is_fp8 else None,
             use_qk_l2norm_in_kernel=True,
         )
-        if ssm_state_is_fp8:
-            active_ssm_state = active_ssm_state[1:]
-            if active_state_indices.numel() > 0:
-                quantized_state, state_scales = quantize_scaled(
-                    active_ssm_state, ssm_state.dtype
-                )
-                _index_copy_fp8_state(ssm_state, active_state_indices, quantized_state)
-                ssm_state_scales.index_copy_(0, active_state_indices, state_scales)
         return
 
 

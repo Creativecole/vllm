@@ -262,6 +262,7 @@ def fused_recurrent_gated_delta_rule_packed_decode_kernel(
     o,
     h0,
     ht,
+    state_scales,
     ssm_state_indices,
     scale,
     stride_mixed_qkv_tok: tl.constexpr,
@@ -269,6 +270,9 @@ def fused_recurrent_gated_delta_rule_packed_decode_kernel(
     stride_b_tok: tl.constexpr,
     stride_init_state_token: tl.constexpr,
     stride_final_state_token: tl.constexpr,
+    stride_state_scale_token: tl.constexpr,
+    stride_state_scale_head: tl.constexpr,
+    stride_state_scale_row: tl.constexpr,
     stride_indices_seq: tl.constexpr,
     H: tl.constexpr,
     HV: tl.constexpr,
@@ -278,6 +282,8 @@ def fused_recurrent_gated_delta_rule_packed_decode_kernel(
     BV: tl.constexpr,
     SOFTPLUS_THRESHOLD: tl.constexpr,
     USE_QK_L2NORM_IN_KERNEL: tl.constexpr,
+    IS_FP8_STATE: tl.constexpr,
+    FP8_QUANT_MAX: tl.constexpr,
 ):
     i_v, i_nh = tl.program_id(0), tl.program_id(1)
     i_n, i_hv = i_nh // HV, i_nh % HV
@@ -300,7 +306,19 @@ def fused_recurrent_gated_delta_rule_packed_decode_kernel(
 
     p_h0 = h0 + state_idx * stride_init_state_token
     p_h0 = p_h0 + i_hv * V * K + o_v[:, None] * K + o_k[None, :]
-    b_h = tl.load(p_h0, mask=mask_h, other=0).to(tl.float32)
+    if IS_FP8_STATE:
+        b_h = tl.load(p_h0, mask=mask_h).to(tl.float32)
+        b_h = tl.where(mask_h, b_h, 0.0)
+        p_state_scale = state_scales + state_idx * stride_state_scale_token
+        p_state_scale = (
+            p_state_scale
+            + i_hv * stride_state_scale_head
+            + o_v * stride_state_scale_row
+        )
+        b_state_scale = tl.load(p_state_scale, mask=mask_v, other=1.0).to(tl.float32)
+        b_h *= b_state_scale[:, None]
+    else:
+        b_h = tl.load(p_h0, mask=mask_h, other=0).to(tl.float32)
 
     p_mixed = mixed_qkv + i_n * stride_mixed_qkv_tok
     q_off = i_h * K + o_k
@@ -333,7 +351,21 @@ def fused_recurrent_gated_delta_rule_packed_decode_kernel(
 
     p_ht = ht + state_idx * stride_final_state_token
     p_ht = p_ht + i_hv * V * K + o_v[:, None] * K + o_k[None, :]
-    tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), mask=mask_h)
+    if IS_FP8_STATE:
+        b_state_amax = tl.max(tl.abs(b_h), axis=1)
+        b_state_scale = tl.where(b_state_amax == 0.0, 1.0, b_state_amax / FP8_QUANT_MAX)
+        b_h = b_h / b_state_scale[:, None]
+        tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), mask=mask_h)
+
+        p_state_scale = state_scales + state_idx * stride_state_scale_token
+        p_state_scale = (
+            p_state_scale
+            + i_hv * stride_state_scale_head
+            + o_v * stride_state_scale_row
+        )
+        tl.store(p_state_scale, b_state_scale, mask=mask_v)
+    else:
+        tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), mask=mask_h)
 
 
 def fused_recurrent_gated_delta_rule_packed_decode(
@@ -347,6 +379,7 @@ def fused_recurrent_gated_delta_rule_packed_decode(
     out: torch.Tensor,
     ssm_state_indices: torch.Tensor,
     use_qk_l2norm_in_kernel: bool = False,
+    ssm_state_scales: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if mixed_qkv.ndim != 2:
         raise ValueError(
@@ -378,6 +411,7 @@ def fused_recurrent_gated_delta_rule_packed_decode(
         or A_log.device != dev
         or dt_bias.device != dev
         or initial_state.device != dev
+        or (ssm_state_scales is not None and ssm_state_scales.device != dev)
         or out.device != dev
         or ssm_state_indices.device != dev
     ):
@@ -401,6 +435,20 @@ def fused_recurrent_gated_delta_rule_packed_decode(
     if initial_state.stride(-1) != 1:
         raise ValueError("`initial_state` must be contiguous in the last dim.")
     HV, V, K = initial_state.shape[-3:]
+    is_fp8_state = initial_state.dtype == torch.float8_e4m3fn
+    if is_fp8_state:
+        expected_scale_shape = (initial_state.shape[0], HV, V, 1)
+        if ssm_state_scales is None:
+            raise ValueError("FP8 `initial_state` requires `ssm_state_scales`.")
+        if ssm_state_scales.dtype != torch.float32:
+            raise ValueError("`ssm_state_scales` must have dtype torch.float32.")
+        if ssm_state_scales.shape != expected_scale_shape:
+            raise ValueError(
+                "`ssm_state_scales` must have shape "
+                f"{expected_scale_shape} (got {tuple(ssm_state_scales.shape)})."
+            )
+    elif ssm_state_scales is not None:
+        raise ValueError("`ssm_state_scales` is only supported with FP8 state.")
     if a.shape[1] != HV or b.shape[1] != HV:
         raise ValueError(
             f"`a`/`b` must have shape [B, HV] with HV={HV} (got a.shape={tuple(a.shape)}, b.shape={tuple(b.shape)})."
@@ -443,6 +491,12 @@ def fused_recurrent_gated_delta_rule_packed_decode(
     stride_b_tok = b.stride(0)
     stride_init_state_token = initial_state.stride(0)
     stride_final_state_token = initial_state.stride(0)
+    kernel_state_scales = (
+        ssm_state_scales if ssm_state_scales is not None else initial_state
+    )
+    stride_state_scale_token = kernel_state_scales.stride(0)
+    stride_state_scale_head = kernel_state_scales.stride(1)
+    stride_state_scale_row = kernel_state_scales.stride(2)
     stride_indices_seq = ssm_state_indices.stride(0)
 
     NV = triton.cdiv(V, BV)
@@ -456,6 +510,7 @@ def fused_recurrent_gated_delta_rule_packed_decode(
         o=out,
         h0=initial_state,
         ht=initial_state,
+        state_scales=kernel_state_scales,
         ssm_state_indices=ssm_state_indices,
         scale=scale,
         stride_mixed_qkv_tok=stride_mixed_qkv_tok,
@@ -463,6 +518,9 @@ def fused_recurrent_gated_delta_rule_packed_decode(
         stride_b_tok=stride_b_tok,
         stride_init_state_token=stride_init_state_token,
         stride_final_state_token=stride_final_state_token,
+        stride_state_scale_token=stride_state_scale_token,
+        stride_state_scale_head=stride_state_scale_head,
+        stride_state_scale_row=stride_state_scale_row,
         stride_indices_seq=stride_indices_seq,
         H=H,
         HV=HV,
@@ -472,6 +530,8 @@ def fused_recurrent_gated_delta_rule_packed_decode(
         BV=BV,
         SOFTPLUS_THRESHOLD=20.0,
         USE_QK_L2NORM_IN_KERNEL=use_qk_l2norm_in_kernel,
+        IS_FP8_STATE=is_fp8_state,
+        FP8_QUANT_MAX=448.0,
         num_warps=num_warps,
         num_stages=num_stages,
     )
