@@ -1,0 +1,482 @@
+[
+  {
+    "stage": "stage1-eager",
+    "model": "/models/Qwen3.8-27B",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "config": {
+      "prompt_len": 512,
+      "output_len": 128,
+      "batch_sizes": [
+        1,
+        32,
+        64,
+        128
+      ],
+      "warmup": 2,
+      "repeat": 5,
+      "enforce_eager": true,
+      "resolved_cudagraph_mode": "NONE"
+    },
+    "cache": {
+      "num_layers": 48,
+      "state_dtype": "torch.float8_e4m3fn",
+      "scale_dtype": "torch.float32",
+      "state_shape": [
+        1227,
+        48,
+        128,
+        128
+      ],
+      "scale_shape": [
+        1227,
+        48,
+        128,
+        1
+      ]
+    },
+    "results": [
+      {
+        "batch_size": 1,
+        "durations_s": [
+          12.559910209999998,
+          12.49954080699996,
+          12.644370856000023,
+          12.444058954000013,
+          12.600195010999983
+        ],
+        "output_tokens_per_second": [
+          10.191155657951159,
+          10.240376184724944,
+          10.123081761656909,
+          10.286032915237493,
+          10.158572933851886
+        ],
+        "mean_output_tokens_per_second": 10.199843890684479,
+        "median_output_tokens_per_second": 10.191155657951159,
+        "token_digest": "0b115a2f10d32c05a867a30b3c8a71b165bc597132082e2435f0cf3fd664e1d5"
+      },
+      {
+        "batch_size": 32,
+        "durations_s": [
+          15.88780396300001,
+          15.839803614000004,
+          15.95587636199997,
+          16.008025047000046,
+          15.914886181000043
+        ],
+        "output_tokens_per_second": [
+          257.8078134359466,
+          258.5890646005075,
+          256.7079304872849,
+          255.8716636170933,
+          257.36910420949175
+        ],
+        "mean_output_tokens_per_second": 257.26911527006484,
+        "median_output_tokens_per_second": 257.36910420949175,
+        "token_digest": "c5cacfb3a68ca933eed1d8f9267a9c8ae3dcfb8c879db9977c9a33cdb8cffb0e"
+      },
+      {
+        "batch_size": 64,
+        "durations_s": [
+          19.54287930099997,
+          19.550668257999973,
+          19.741716175999954,
+          19.769786815999964,
+          19.502790307000055
+        ],
+        "output_tokens_per_second": [
+          419.1808112728216,
+          419.0138102644088,
+          414.9588580327698,
+          414.3696680315288,
+          420.0424591069761
+        ],
+        "mean_output_tokens_per_second": 417.51312134170104,
+        "median_output_tokens_per_second": 419.0138102644088,
+        "token_digest": "67a2ea9bb83424e13509e098548104e3c81da33f1ec5c3bb66e5f42a87b5e5c3"
+      },
+      {
+        "batch_size": 128,
+        "durations_s": [
+          29.67451504799999,
+          29.774543937999965,
+          30.02122257999997,
+          29.79679613899998,
+          29.77142806100005
+        ],
+        "output_tokens_per_second": [
+          552.1235974201456,
+          550.2687139093274,
+          545.7472611696687,
+          549.8577740898646,
+          550.3263050207087
+        ],
+        "mean_output_tokens_per_second": 549.664730321943,
+        "median_output_tokens_per_second": 550.2687139093274,
+        "token_digest": "66507ad32509b8eaa8ba6eee508fdee76d4c6ab929cd8b7316d23150f659b9fc"
+      }
+    ]
+  },
+  {
+    "stage": "stage2-eager",
+    "model": "/models/Qwen3.8-27B",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "config": {
+      "prompt_len": 512,
+      "output_len": 128,
+      "batch_sizes": [
+        1,
+        32,
+        64,
+        128
+      ],
+      "warmup": 2,
+      "repeat": 5,
+      "enforce_eager": true,
+      "resolved_cudagraph_mode": "NONE"
+    },
+    "cache": {
+      "num_layers": 48,
+      "state_dtype": "torch.float8_e4m3fn",
+      "scale_dtype": "torch.float32",
+      "state_shape": [
+        1227,
+        48,
+        128,
+        128
+      ],
+      "scale_shape": [
+        1227,
+        48,
+        128,
+        1
+      ]
+    },
+    "results": [
+      {
+        "batch_size": 1,
+        "durations_s": [
+          9.043989054999997,
+          9.342212508999978,
+          9.27026765200003,
+          9.300610790000064,
+          9.380921227000044
+        ],
+        "output_tokens_per_second": [
+          14.153046760846621,
+          13.701251162579425,
+          13.807584074704081,
+          13.762536987100297,
+          13.644715364584032
+        ],
+        "mean_output_tokens_per_second": 13.813826869962892,
+        "median_output_tokens_per_second": 13.762536987100297,
+        "token_digest": "1427c614904f756beea0e46ea5f1f3fb633d6b3c9c9fd3c698d2f74b7752b09b"
+      },
+      {
+        "batch_size": 32,
+        "durations_s": [
+          11.263363139000035,
+          11.39331826700004,
+          11.557932409999921,
+          11.820076440000093,
+          11.458416822000117
+        ],
+        "output_tokens_per_second": [
+          363.6569246193765,
+          359.5089599018559,
+          354.38864449978456,
+          346.52906187127564,
+          357.4664863068775
+        ],
+        "mean_output_tokens_per_second": 356.31001543983405,
+        "median_output_tokens_per_second": 357.4664863068775,
+        "token_digest": "c5cacfb3a68ca933eed1d8f9267a9c8ae3dcfb8c879db9977c9a33cdb8cffb0e"
+      },
+      {
+        "batch_size": 64,
+        "durations_s": [
+          13.275521602000026,
+          13.448497064999856,
+          13.20764134000001,
+          13.39398660500001,
+          13.147027116000118
+        ],
+        "output_tokens_per_second": [
+          617.0755655104227,
+          609.1386985776977,
+          620.2470061925526,
+          611.6177536672991,
+          623.1066481965509
+        ],
+        "mean_output_tokens_per_second": 616.2371344289046,
+        "median_output_tokens_per_second": 617.0755655104227,
+        "token_digest": "ce84e155e6245b2b18511f653f312422ea1fb52ab75dadfe24363aa603a5bb4c"
+      },
+      {
+        "batch_size": 128,
+        "durations_s": [
+          16.494532787000026,
+          16.21797235500003,
+          16.811148030999902,
+          15.898395116000074,
+          16.587865375999854
+        ],
+        "output_tokens_per_second": [
+          993.2988228022353,
+          1010.2372627949871,
+          974.5913824438261,
+          1030.5442706925314,
+          987.7099692227538
+        ],
+        "mean_output_tokens_per_second": 999.2763415912667,
+        "median_output_tokens_per_second": 993.2988228022353,
+        "token_digest": "07c210e7acf62f287fcc7eccab36181c886dda1e101b0048307d68ebd5633de5"
+      }
+    ]
+  },
+  {
+    "stage": "stage3-eager",
+    "model": "/models/Qwen3.8-27B",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "config": {
+      "prompt_len": 512,
+      "output_len": 128,
+      "batch_sizes": [
+        1,
+        32,
+        64,
+        128
+      ],
+      "warmup": 2,
+      "repeat": 5,
+      "enforce_eager": true,
+      "resolved_cudagraph_mode": "NONE"
+    },
+    "cache": {
+      "num_layers": 48,
+      "state_dtype": "torch.float8_e4m3fn",
+      "scale_dtype": "torch.float32",
+      "state_shape": [
+        1227,
+        48,
+        128,
+        128
+      ],
+      "scale_shape": [
+        1227,
+        48,
+        128,
+        1
+      ]
+    },
+    "results": [
+      {
+        "batch_size": 1,
+        "durations_s": [
+          9.211528028999965,
+          9.472502980999934,
+          9.83614185600004,
+          9.480191220000052,
+          9.00738741500004
+        ],
+        "output_tokens_per_second": [
+          13.89563160390189,
+          13.512795958654646,
+          13.013232411031169,
+          13.50183736061806,
+          14.210557856858813
+        ],
+        "mean_output_tokens_per_second": 13.626811038212916,
+        "median_output_tokens_per_second": 13.512795958654646,
+        "token_digest": "1427c614904f756beea0e46ea5f1f3fb633d6b3c9c9fd3c698d2f74b7752b09b"
+      },
+      {
+        "batch_size": 32,
+        "durations_s": [
+          11.442596427999888,
+          11.27931200199987,
+          11.408210303000033,
+          11.29793502099983,
+          11.584773745999883
+        ],
+        "output_tokens_per_second": [
+          357.9607151028363,
+          363.1427164417264,
+          359.03966452326614,
+          362.54412796556494,
+          353.5675438991039
+        ],
+        "mean_output_tokens_per_second": 359.2509535864995,
+        "median_output_tokens_per_second": 359.03966452326614,
+        "token_digest": "c5cacfb3a68ca933eed1d8f9267a9c8ae3dcfb8c879db9977c9a33cdb8cffb0e"
+      },
+      {
+        "batch_size": 64,
+        "durations_s": [
+          12.980973758000118,
+          12.96626330800018,
+          13.217255874999864,
+          13.004331916000183,
+          13.355842037000002
+        ],
+        "output_tokens_per_second": [
+          631.0774640424264,
+          631.7934323411077,
+          619.7958242977636,
+          629.9439335227042,
+          613.3645469379999
+        ],
+        "mean_output_tokens_per_second": 625.1950402284003,
+        "median_output_tokens_per_second": 629.9439335227042,
+        "token_digest": "ac35f86e4d4774125ec0513f60bcbf971a5a7811704826960168e09af7674ac2"
+      },
+      {
+        "batch_size": 128,
+        "durations_s": [
+          16.468900502999986,
+          16.907258328999887,
+          16.31413499900009,
+          16.96061778499984,
+          16.393224364999924
+        ],
+        "output_tokens_per_second": [
+          994.8447983528396,
+          969.0512607770133,
+          1004.282482706205,
+          966.0025482379652,
+          999.4373062434491
+        ],
+        "mean_output_tokens_per_second": 986.7236792634944,
+        "median_output_tokens_per_second": 994.8447983528396,
+        "token_digest": "ff84a01b2fa23d4bd8fcffec8107089d5cea7544498c215191ac28d4ffab6b69"
+      }
+    ]
+  },
+  {
+    "stage": "stage3-cudagraph",
+    "model": "/models/Qwen3.8-27B",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.13.0+cu130",
+    "cuda": "13.0",
+    "config": {
+      "prompt_len": 512,
+      "output_len": 128,
+      "batch_sizes": [
+        1,
+        32,
+        64,
+        128
+      ],
+      "warmup": 2,
+      "repeat": 5,
+      "enforce_eager": false,
+      "resolved_cudagraph_mode": "FULL_AND_PIECEWISE"
+    },
+    "cache": {
+      "num_layers": 48,
+      "state_dtype": "torch.float8_e4m3fn",
+      "scale_dtype": "torch.float32",
+      "state_shape": [
+        1156,
+        48,
+        128,
+        128
+      ],
+      "scale_shape": [
+        1156,
+        48,
+        128,
+        1
+      ]
+    },
+    "results": [
+      {
+        "batch_size": 1,
+        "durations_s": [
+          2.646248551000099,
+          2.6467947529999947,
+          2.6415325030000076,
+          2.6480004689999532,
+          2.6469128799999453
+        ],
+        "output_tokens_per_second": [
+          48.37036186628231,
+          48.36037998598838,
+          48.45671967111117,
+          48.33836001862213,
+          48.35822174850071
+        ],
+        "mean_output_tokens_per_second": 48.37680865810094,
+        "median_output_tokens_per_second": 48.36037998598838,
+        "token_digest": "1427c614904f756beea0e46ea5f1f3fb633d6b3c9c9fd3c698d2f74b7752b09b"
+      },
+      {
+        "batch_size": 32,
+        "durations_s": [
+          4.179905408999957,
+          4.185121180999886,
+          4.177444072000071,
+          4.2026181789999555,
+          4.201581891999922
+        ],
+        "output_tokens_per_second": [
+          979.9264813937425,
+          978.705232860523,
+          980.5038510159927,
+          974.6305340007533,
+          974.8709189267603
+        ],
+        "mean_output_tokens_per_second": 977.7274036395544,
+        "median_output_tokens_per_second": 978.705232860523,
+        "token_digest": "c5cacfb3a68ca933eed1d8f9267a9c8ae3dcfb8c879db9977c9a33cdb8cffb0e"
+      },
+      {
+        "batch_size": 64,
+        "durations_s": [
+          5.951595996000378,
+          5.9466869850002695,
+          5.955777535000379,
+          5.974003301999801,
+          5.968794887000058
+        ],
+        "output_tokens_per_second": [
+          1376.4375144927897,
+          1377.5737684971875,
+          1375.471120581316,
+          1371.2747693423141,
+          1372.4713539481893
+        ],
+        "mean_output_tokens_per_second": 1374.6457053723593,
+        "median_output_tokens_per_second": 1375.471120581316,
+        "token_digest": "d84d3bbd291dcfd11858cf9c6c12db749751057033604c4be350b06b3e4f9876"
+      },
+      {
+        "batch_size": 128,
+        "durations_s": [
+          9.159242965999965,
+          9.173858062999898,
+          9.176676363999832,
+          9.168649028000345,
+          9.210509782999907
+        ],
+        "output_tokens_per_second": [
+          1788.7941242326535,
+          1785.9443526906225,
+          1785.395861215565,
+          1786.9590110783531,
+          1778.8374787072485
+        ],
+        "mean_output_tokens_per_second": 1785.1861655848886,
+        "median_output_tokens_per_second": 1785.9443526906225,
+        "token_digest": "659be38b8833d20d897cfb0431bf413c49edf47e7b308742b842c3265d818c17"
+      }
+    ]
+  }
+]
