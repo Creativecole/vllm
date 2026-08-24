@@ -25,7 +25,7 @@ vLLM is a fast and easy-to-use library for LLM inference and serving.
 
 This branch contains an experimental
 [Qwen3.8 FP8 GDN recurrent-state cache](docs/design/qwen3_8_fp8_gdn_recurrent_state.md)
-for NVIDIA Hopper, including fused packed decode, mixed-serving support,
+for NVIDIA H100, including fused packed decode, mixed-serving support,
 CUDA Graph replay validation, benchmarks, and profiling results.
 
 Originally developed in the [Sky Computing Lab](https://sky.cs.berkeley.edu) at UC Berkeley, vLLM has grown into one of the most active open-source AI projects built and maintained by a diverse community of many dozens of academic institutions and companies from over 2000 contributors.
