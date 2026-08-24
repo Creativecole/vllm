@@ -4,9 +4,30 @@
 import torch
 
 from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
+    _index_copy_fp8_state,
     _prepare_fp8_packed_decode_state,
     _prepare_fp8_prefill_initial_state,
 )
+
+
+def test_index_copy_fp8_state_preserves_bits_and_untouched_rows():
+    dst = torch.arange(24, dtype=torch.float32).reshape(4, 2, 3).to(torch.float8_e4m3fn)
+    src = torch.tensor(
+        [
+            [[-1.0, -2.0, -3.0], [4.0, 5.0, 6.0]],
+            [[7.0, 8.0, 9.0], [-10.0, -11.0, -12.0]],
+        ],
+        dtype=torch.float32,
+    ).to(torch.float8_e4m3fn)
+    indices = torch.tensor([1, 3], dtype=torch.int32)
+    original_bits = dst.view(torch.uint8).clone()
+
+    _index_copy_fp8_state(dst, indices, src)
+
+    dst_bits = dst.view(torch.uint8)
+    assert torch.equal(dst_bits.index_select(0, indices.long()), src.view(torch.uint8))
+    assert torch.equal(dst_bits[0], original_bits[0])
+    assert torch.equal(dst_bits[2], original_bits[2])
 
 
 def test_fp8_packed_decode_reserves_null_scratch_slot():

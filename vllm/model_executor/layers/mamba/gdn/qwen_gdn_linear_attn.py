@@ -84,6 +84,22 @@ if GDN_AITER_TRITON_AVAILABLE:
 logger = init_logger(__name__)
 
 
+def _index_copy_fp8_state(
+    dst: torch.Tensor,
+    indices: torch.Tensor,
+    src: torch.Tensor,
+) -> None:
+    assert dst.dtype == src.dtype
+    assert dst.dtype in FP8_SSM_STATE_DTYPES
+    assert dst.element_size() == 1
+    assert src.element_size() == 1
+    dst.view(torch.uint8).index_copy_(
+        0,
+        indices.long(),
+        src.view(torch.uint8),
+    )
+
+
 def _prepare_fp8_prefill_initial_state(
     ssm_state: torch.Tensor,
     ssm_state_scales: torch.Tensor,
@@ -1540,8 +1556,10 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
                 quantized_state, state_scales = quantize_scaled(
                     last_recurrent_state, ssm_state.dtype
                 )
-                ssm_state[prefill_state_indices] = quantized_state
-                ssm_state_scales[prefill_state_indices] = state_scales
+                _index_copy_fp8_state(ssm_state, prefill_state_indices, quantized_state)
+                ssm_state_scales.index_copy_(
+                    0, prefill_state_indices.long(), state_scales
+                )
             else:
                 ssm_state[prefill_state_indices] = last_recurrent_state.to(
                     ssm_state.dtype
@@ -1732,7 +1750,7 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
                 quantized_state, state_scales = quantize_scaled(
                     active_ssm_state, ssm_state.dtype
                 )
-                ssm_state.index_copy_(0, active_state_indices, quantized_state)
+                _index_copy_fp8_state(ssm_state, active_state_indices, quantized_state)
                 ssm_state_scales.index_copy_(0, active_state_indices, state_scales)
         return
 

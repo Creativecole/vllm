@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from vllm.logger import init_logger
+from vllm.model_executor.layers.mamba.mamba_utils import FP8_SSM_STATE_DTYPES
 
 if TYPE_CHECKING:
     from vllm.v1.worker.gpu_model_runner import GPUModelRunner
@@ -40,7 +41,7 @@ class _QwenGDNWarmupConfig:
     a_log: torch.Tensor
     dt_bias: torch.Tensor
     state_stride_token: int
-    state_dtype: torch.dtype
+    compute_state_dtype: torch.dtype
 
     @property
     def conv_dim(self) -> int:
@@ -49,6 +50,12 @@ class _QwenGDNWarmupConfig:
 
 def _is_non_empty_tensor(value: object) -> bool:
     return isinstance(value, torch.Tensor) and value.numel() > 0
+
+
+def _qwen_gdn_compute_state_dtype(physical_state_dtype: torch.dtype) -> torch.dtype:
+    if physical_state_dtype in FP8_SSM_STATE_DTYPES:
+        return torch.float32
+    return physical_state_dtype
 
 
 def _is_qwen_gdn_layer(module: object) -> bool:
@@ -124,7 +131,7 @@ def _qwen_gdn_warmup_config(
             a_log=layer.A_log,
             dt_bias=layer.dt_bias,
             state_stride_token=int(ssm_state.stride(0)),
-            state_dtype=ssm_state.dtype,
+            compute_state_dtype=_qwen_gdn_compute_state_dtype(ssm_state.dtype),
         )
 
     if found_layer:
@@ -215,7 +222,7 @@ def _warm_fused_sigmoid_gating_delta_rule_update_kernel(
     b = torch.empty_like(a)
     state = torch.empty(
         (1, config.state_stride_token),
-        dtype=config.state_dtype,
+        dtype=config.compute_state_dtype,
         device=device,
     )
     cu_seqlens = torch.tensor([0, 1], dtype=torch.int32, device=device)
