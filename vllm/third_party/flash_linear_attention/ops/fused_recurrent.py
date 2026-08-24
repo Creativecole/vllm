@@ -368,6 +368,17 @@ def fused_recurrent_gated_delta_rule_packed_decode_kernel(
         tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), mask=mask_h)
 
 
+def _packed_decode_launch_config(
+    batch_size: int,
+    is_fp8_state: bool,
+) -> tuple[int, int, int]:
+    if not is_fp8_state:
+        return 32, 1, 3
+    if batch_size <= 32:
+        return 16, 1, 3
+    return 32, 2, 1
+
+
 def fused_recurrent_gated_delta_rule_packed_decode(
     mixed_qkv: torch.Tensor,
     a: torch.Tensor,
@@ -380,6 +391,7 @@ def fused_recurrent_gated_delta_rule_packed_decode(
     ssm_state_indices: torch.Tensor,
     use_qk_l2norm_in_kernel: bool = False,
     ssm_state_scales: torch.Tensor | None = None,
+    _launch_config: tuple[int, int, int] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if mixed_qkv.ndim != 2:
         raise ValueError(
@@ -482,9 +494,21 @@ def fused_recurrent_gated_delta_rule_packed_decode(
         raise ValueError(
             f"Packed decode kernel only supports NK=1 (got K={K}, BK={BK})."
         )
-    BV = min(triton.next_power_of_2(V), 32)
-    num_stages = 3
-    num_warps = 1
+    if _launch_config is None:
+        max_bv, num_warps, num_stages = _packed_decode_launch_config(B, is_fp8_state)
+    else:
+        max_bv, num_warps, num_stages = _launch_config
+        if max_bv not in (16, 32):
+            raise ValueError(f"Packed decode BV must be 16 or 32 (got {max_bv}).")
+        if num_warps not in (1, 2, 4):
+            raise ValueError(
+                f"Packed decode num_warps must be 1, 2, or 4 (got {num_warps})."
+            )
+        if num_stages not in (1, 2, 3):
+            raise ValueError(
+                f"Packed decode num_stages must be 1, 2, or 3 (got {num_stages})."
+            )
+    BV = min(triton.next_power_of_2(V), max_bv)
 
     stride_mixed_qkv_tok = mixed_qkv.stride(0)
     stride_a_tok = a.stride(0)
