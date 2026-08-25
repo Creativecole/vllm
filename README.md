@@ -1,115 +1,204 @@
-<!-- markdownlint-disable MD001 MD041 -->
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-dark.png">
-    <img alt="vLLM" src="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-light.png" width=55%>
-  </picture>
-</p>
+# Qwen3.8 FP8 GDN recurrent-state cache for vLLM
 
-<h3 align="center">
-Easy, fast, and cheap LLM serving for everyone
-</h3>
+This branch is an experimental vLLM v0.27.1 implementation of an FP8 E4M3
+persistent recurrent-state cache for Qwen3.8-27B Gated DeltaNet (GDN) layers on
+NVIDIA Hopper H100.
 
-<p align="center">
-| <a href="https://docs.vllm.ai"><b>Documentation</b></a> | <a href="https://blog.vllm.ai/"><b>Blog</b></a> | <a href="https://arxiv.org/abs/2309.06180"><b>Paper</b></a> | <a href="https://x.com/vllm_project"><b>Twitter/X</b></a> | <a href="https://discuss.vllm.ai"><b>User Forum</b></a> | <a href="https://slack.vllm.ai"><b>Developer Slack</b></a> |
-</p>
+The project reduces recurrent-state memory and decode traffic while preserving
+FP32 recurrent computation. It does not modify the attention KV cache.
 
-🔥 We have built a vLLM website to help you get started with vLLM. Please visit [vllm.ai](https://vllm.ai) to learn more.
-For events, please visit [vllm.ai/events](https://vllm.ai/events) to join us.
+> **Validated target:** Qwen3.8-27B, one NVIDIA H100 80GB HBM3, BF16 model and
+> activations, tensor parallel size 1. The checkpoint declares
+> `Qwen3_5ForConditionalGeneration` with a `qwen3_5_text` configuration.
 
----
+## What this branch contains
 
-## About
+- FP8 E4M3 physical GDN recurrent state with FP32 row scales.
+- FP32 recurrence for prefill and decode.
+- Fused Triton FP8 dequantization, recurrence, requantization, and persistent
+  state writeback for packed non-speculative decode.
+- Mixed prefill and decode support with decode-first metadata ordering.
+- Continuous batching and chunked prefill compatibility.
+- Normal vLLM CUDA Graph capture and replay support.
+- Matched Stage-1, Stage-2, and Stage-3 H100 benchmarks.
+- PyTorch Profiler and Nsight Compute attribution.
+- Deterministic generation and GSM8K quality-comparison tooling.
 
-vLLM is a fast and easy-to-use library for LLM inference and serving.
+The complete design and measurement notes are in
+[`docs/design/qwen3_8_fp8_gdn_recurrent_state.md`](docs/design/qwen3_8_fp8_gdn_recurrent_state.md).
 
-This branch contains an experimental
-[Qwen3.8 FP8 GDN recurrent-state cache](docs/design/qwen3_8_fp8_gdn_recurrent_state.md)
-for NVIDIA H100, including fused packed decode, mixed-serving support,
-CUDA Graph replay validation, benchmarks, and profiling results.
+## Model and cache geometry
 
-Originally developed in the [Sky Computing Lab](https://sky.cs.berkeley.edu) at UC Berkeley, vLLM has grown into one of the most active open-source AI projects built and maintained by a diverse community of many dozens of academic institutions and companies from over 2000 contributors.
+Qwen3.8-27B has 64 language layers: 48 GDN layers and 16 full-attention layers.
+At TP1, each GDN layer uses 48 value heads with `K=128` and `V=128`.
 
-vLLM is fast with:
+| Tensor | Per-request shape | Storage dtype |
+| --- | --- | --- |
+| Convolution state | `[10240, 3]` per GDN layer | BF16 in the validated run |
+| Recurrent state | `[48, 128, 128]` per GDN layer | FP8 E4M3 |
+| Row scales | `[48, 128, 1]` per GDN layer | FP32 |
 
-- State-of-the-art serving throughput
-- Efficient management of attention key and value memory with [**PagedAttention**](https://blog.vllm.ai/2023/06/20/vllm.html)
-- Continuous batching of incoming requests, chunked prefill, prefix caching
-- Fast and flexible model execution with piecewise and full CUDA/HIP graphs
-- Quantization: FP8, MXFP8/MXFP4, NVFP4, INT8, INT4, GPTQ/AWQ, GGUF, compressed-tensors, ModelOpt, TorchAO, and [more](https://docs.vllm.ai/en/latest/features/quantization/index.html)
-- Optimized attention kernels including FlashAttention, FlashInfer, TRTLLM-GEN, FlashMLA, and Triton
-- Optimized GEMM/MoE kernels for various precisions using CUTLASS, TRTLLM-GEN, CuTeDSL
-- Speculative decoding including n-gram, suffix, EAGLE, DFlash
-- Automatic kernel generation and graph-level transformations using torch.compile
-- Disaggregated prefill, decode, and encode
+Across all 48 GDN layers, the original FP32 recurrent state occupies 144 MiB
+per request. This branch stores 36 MiB of FP8 state plus 1.125 MiB of FP32
+scales. BF16 convolution state adds 2.8125 MiB, for 39.9375 MiB of total GDN
+state per request in the validated configuration.
 
-vLLM is flexible and easy to use with:
+## Implementation stages
 
-- Seamless integration with popular Hugging Face models
-- High-throughput serving with various decoding algorithms, including *parallel sampling*, *beam search*, and more
-- Tensor, pipeline, data, expert, and context parallelism for distributed inference
-- Streaming outputs
-- Generation of structured outputs using xgrammar or guidance
-- Tool calling and reasoning parsers
-- OpenAI-compatible API server, plus Anthropic Messages API and gRPC support
-- Efficient multi-LoRA support for dense and MoE layers
-- Support for NVIDIA GPUs, AMD GPUs, Intel GPUs, and x86/ARM/PowerPC CPUs. Additionally, diverse hardware plugins such as Google TPUs, Intel Gaudi, IBM Spyre, Huawei Ascend, Rebellions NPU, Apple Silicon, MetaX GPU, and more.
+### Stage 1: FP8 physical state
 
-vLLM seamlessly supports 200+ model architectures on Hugging Face, including:
+The GDN cache tuple is extended to
+`(conv_state, ssm_state, ssm_state_scales)`. State is dynamically quantized per
+contiguous 128-element row:
 
-- Decoder-only LLMs (e.g., Llama, Qwen, Gemma)
-- Mixture-of-Expert LLMs (e.g., Mixtral, DeepSeek-V3, Qwen-MoE, GPT-OSS)
-- Hybrid attention and state-space models (e.g., Mamba, Qwen3.5)
-- Multi-modal models (e.g., LLaVA, Qwen-VL, Pixtral)
-- Embedding and retrieval models (e.g., E5-Mistral, GTE, ColBERT)
-- Reward and classification models (e.g., Qwen-Math)
+```text
+scale = 1                         if amax == 0
+scale = amax / 448                otherwise
+state_fp8 = E4M3(state_fp32 / scale)
+state_fp32 = float(state_fp8) * scale
+```
 
-Find the full list of supported models [here](https://docs.vllm.ai/en/latest/models/supported_models.html).
+Prefill runs the existing recurrence in FP32 and writes its final state back as
+FP8 plus FP32 scales. The Stage-1 decode baseline gathers active state into
+FP32 scratch, runs the float recurrent kernel, and quantizes the result back.
 
-## Getting Started
+### Stage 2: fused packed decode
 
-Install vLLM with [`uv`](https://docs.astral.sh/uv/) (recommended) or `pip`:
+The packed recurrent Triton kernel directly consumes persistent FP8 state and
+FP32 scales. It dequantizes into FP32 registers, performs the existing
+normalized gated-delta recurrence, produces output from updated FP32 state,
+then requantizes and writes state and scales in place. This removes the
+Stage-1 Python gather, FP32 scratch, Q/DQ, and indexed writeback operations.
+
+### Stage 3: launch tuning and CUDA Graph
+
+The final fixed dispatch is:
+
+| Persistent state | Batch | `BV` | Warps | Stages |
+| --- | ---: | ---: | ---: | ---: |
+| FP8 E4M3 | `B <= 32` | 16 | 1 | 3 |
+| FP8 E4M3 | `B > 32` | 32 | 2 | 1 |
+| FP32/FP16/BF16 | any | 32 | 1 | 3 |
+
+No Triton autotuner runs in the serving path. FP32, FP16, and BF16 retain their
+original cache behavior and use the non-FP8 launch configuration.
+
+## Canonical H100 end-to-end result
+
+The final matched run used Qwen3.8-27B, prompt length 512, output length 128,
+two warmups, and five measured repetitions. Values are mean end-to-end output
+token throughput.
+
+| Batch | Stage 1 eager | Stage 2 eager | Stage 3 eager | Stage 3 CUDA Graph |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 10.20 tok/s | 13.81 tok/s | 13.63 tok/s | 48.38 tok/s |
+| 32 | 257.27 tok/s | 356.31 tok/s | 359.25 tok/s | 977.73 tok/s |
+| 64 | 417.51 tok/s | 616.24 tok/s | 625.20 tok/s | 1374.65 tok/s |
+| 128 | 549.66 tok/s | 999.28 tok/s | 986.72 tok/s | 1785.19 tok/s |
+
+At BS128, Stage 1 to Stage 2 is approximately `1.818x`. Stage-3 isolated kernel
+tuning is measurable, but a material Stage-2-to-Stage-3 eager improvement for
+the 27B end-to-end run is not established. CUDA Graph results include normal
+vLLM compilation and launch-overhead reductions and are not recurrent-kernel-
+only gains.
+
+Raw canonical results are stored in
+[`docs/assets/qwen3_8_fp8_gdn_h100_results.json`](docs/assets/qwen3_8_fp8_gdn_h100_results.json).
+
+## Kernel profiling
+
+Nsight Compute measured the BS128 Stage-1 and Stage-2 packed recurrent kernels:
+
+| Metric | Stage 1 | Stage 2 | Change |
+| --- | ---: | ---: | ---: |
+| Kernel latency | 267.872 us | 120.608 us | 2.221x faster |
+| DRAM traffic | ~751.3 MiB | ~181.1 MiB | ~4.15x lower |
+| L2 traffic | — | — | ~3.79x lower |
+
+These are measured profiler values, not theoretical traffic estimates.
+PyTorch Profiler confirms that the Stage-1 scratch/QDQ operations disappear
+from the Stage-2 packed decode path.
+
+## Quality smoke result
+
+A controlled 500-question GSM8K 5-shot run compared FP32 and FP8 recurrent-state
+storage in separate sequential processes on the same H100. Both used greedy
+decoding, seed 0, BF16 model execution, TP1, and identical eager serving
+settings.
+
+| Recurrent-state storage | Correct | Exact match | Invalid answers |
+| --- | ---: | ---: | ---: |
+| FP32 | 383/500 | 76.6% | 0 |
+| FP8 E4M3 | 387/500 | 77.4% | 0 |
+
+Correctness differed on 18 paired examples: 7 were FP32-only correct and 11
+were FP8-only correct. The `+0.8` percentage-point difference is a smoke result,
+not evidence that FP8 improves accuracy. This subset and task do not establish
+general model-quality preservation.
+
+See [`benchmarks/accuracy/README.md`](benchmarks/accuracy/README.md) for the
+methodology and full 1,319-question commands.
+
+## Reproduction
+
+Create the development environment and install this branch:
 
 ```bash
-uv pip install vllm
+uv venv --python 3.12
+source .venv/bin/activate
+VLLM_USE_PRECOMPILED=1 uv pip install -e . --torch-backend=auto
 ```
 
-Or [build from source](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/index.html#build-wheel-from-source) for development.
+Run the focused tests:
 
-Visit our [documentation](https://docs.vllm.ai/en/latest/) to learn more.
+```bash
+.venv/bin/python -m pytest \
+  tests/kernels/test_fused_recurrent_packed_decode.py -q
 
-- [Installation](https://docs.vllm.ai/en/latest/getting_started/installation.html)
-- [Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart.html)
-- [List of Supported Models](https://docs.vllm.ai/en/latest/models/supported_models.html)
+.venv/bin/python -m pytest \
+  tests/kernels/mamba/test_gdn_forward_core_split.py \
+  -q -k forward_core_mixed_fp8
 
-## Contributing
-
-We welcome and value any contributions and collaborations.
-Please check out [Contributing to vLLM](https://docs.vllm.ai/en/latest/contributing/index.html) for how to get involved.
-
-## Citation
-
-If you use vLLM for your research, please cite our [paper](https://arxiv.org/abs/2309.06180):
-
-```bibtex
-@inproceedings{kwon2023efficient,
-  title={Efficient Memory Management for Large Language Model Serving with PagedAttention},
-  author={Woosuk Kwon and Zhuohan Li and Siyuan Zhuang and Ying Sheng and Lianmin Zheng and Cody Hao Yu and Joseph E. Gonzalez and Hao Zhang and Ion Stoica},
-  booktitle={Proceedings of the ACM SIGOPS 29th Symposium on Operating Systems Principles},
-  year={2023}
-}
+.venv/bin/python -m pytest \
+  tests/benchmarks/test_qwen3_8_gdn_state_quality.py -q
 ```
 
-## Contact Us
+Run the isolated packed-kernel benchmark:
 
-<!-- --8<-- [start:contact-us] -->
-- For technical questions and feature requests, please use GitHub [Issues](https://github.com/vllm-project/vllm/issues)
-- For discussing with fellow users, please use the [vLLM Forum](https://discuss.vllm.ai)
-- For coordinating contributions and development, please use [Slack](https://slack.vllm.ai)
-- For security disclosures, please use GitHub's [Security Advisories](https://github.com/vllm-project/vllm/security/advisories) feature
-- For collaborations and partnerships, please contact us at [collaboration@vllm.ai](mailto:collaboration@vllm.ai)
-<!-- --8<-- [end:contact-us] -->
+```bash
+.venv/bin/python benchmarks/kernels/benchmark_fused_recurrent_gdn_fp8.py \
+  --batch-sizes 1 32 64 128 \
+  --mode eager cudagraph \
+  --warmup 20 \
+  --repeat 100 \
+  --output qwen38_stage3_kernel_tune.json
+```
 
-## Media Kit
+Run the 27B benchmark with a user-supplied checkpoint path or model ID:
 
-- If you wish to use vLLM's logo, please refer to [our media kit repo](https://github.com/vllm-project/media-kit)
+```bash
+MODEL="<local-checkpoint-path-or-model-id>"
+VLLM_ENABLE_FLA_PACKED_RECURRENT_DECODE=1 \
+.venv/bin/python benchmarks/benchmark_qwen3_8_fp8_gdn.py \
+  --model "$MODEL" \
+  --stage-label stage3-cudagraph \
+  --output stage3-cudagraph.json \
+  --prompt-len 512 \
+  --output-len 128 \
+  --batch-sizes 1 32 64 128 \
+  --warmup 2 \
+  --repeat 5
+```
+
+## Scope and limitations
+
+- The fused FP8 packed-decode path is limited to non-speculative decode.
+- Speculative decoding is not supported.
+- Validation and performance claims are limited to TP1 on H100.
+- No multi-GPU performance or correctness claim is made.
+- Prefix caching was disabled in the reported serving runs.
+- Mixed prefill/decode, continuous batching, chunked prefill, and normal vLLM
+  CUDA Graph replay are supported in the validated configuration.
+- Active positive state indices in a packed batch must be unique. Duplicate
+  slots would race in-place state and scale writes.
+- The attention KV cache is unchanged.
