@@ -174,6 +174,26 @@ error and used a 0.57 GiB graph pool. The graph-versus-eager numbers include
 vLLM compilation and launch-overhead reductions; they must not be attributed to
 the recurrent kernel alone.
 
+## Model-quality validation protocol
+
+The final quality comparison is implemented in
+[`qwen3_8_gdn_state_quality.py`](../../benchmarks/accuracy/qwen3_8_gdn_state_quality.py),
+with commands and extraction details in its
+[`README`](../../benchmarks/accuracy/README.md).
+It runs FP32 and FP8 recurrent-state storage in separate, otherwise matched
+processes and compares deterministic token sensitivity plus GSM8K 5-shot exact
+match.
+
+A 500-question H100 smoke run used the first 500 GSM8K test examples, greedy
+decoding, seed 0, BF16 model execution, TP1, eager mode, and identical serving
+settings except for recurrent-state storage dtype. FP32 state scored 383/500
+(76.6%) and FP8 E4M3 state scored 387/500 (77.4%), a +0.8 percentage-point
+difference. Correctness differed on 18 paired examples: 7 were FP32-only
+correct and 11 were FP8-only correct. Neither run produced an invalid answer.
+This limited smoke result does not establish an FP8 accuracy improvement or
+general model-quality preservation; the full 1,319-question evaluation and
+broader tasks remain necessary for stronger conclusions.
+
 ## Reproduction
 
 Run the isolated H100 configuration sweep:
