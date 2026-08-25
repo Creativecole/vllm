@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "scope": "Qwen3.8-27B GDN packed non-speculative decode",
+  "environment": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "tensor_parallel_size": 1,
+    "model_dtype": "bfloat16",
+    "persistent_state_dtype": "float8_e4m3fn",
+    "scale_dtype": "float32"
+  },
+  "decode_geometry": {
+    "query_heads": 16,
+    "value_heads": 48,
+    "key_head_dim": 128,
+    "value_head_dim": 128
+  },
+  "pytorch_profiler": {
+    "source_artifact": "qwen38_fp8_stage1_stage2_bs128_profile_compare.json",
+    "settings": {
+      "batch_size": 128,
+      "prompt_length": 512,
+      "output_length": 128,
+      "warmup_runs": 1,
+      "profiled_runs": 1,
+      "mode": "eager"
+    },
+    "selected_operator_totals": [
+      {
+        "name": "aten::gather",
+        "stage1_self_device_ms": 477.532244,
+        "stage2_self_device_ms": 0.0,
+        "stage1_count": 12611,
+        "stage2_count": 0
+      },
+      {
+        "name": "aten::div",
+        "stage1_self_device_ms": 2189.873677,
+        "stage2_self_device_ms": 18.811225,
+        "stage1_count": 13056,
+        "stage2_count": 480
+      },
+      {
+        "name": "aten::amax",
+        "stage1_self_device_ms": 1439.813304,
+        "stage2_self_device_ms": 14.480765,
+        "stage1_count": 6528,
+        "stage2_count": 240
+      },
+      {
+        "name": "aten::index_copy_",
+        "stage1_self_device_ms": 1742.357323,
+        "stage2_self_device_ms": 18.126131,
+        "stage1_count": 13200,
+        "stage2_count": 624
+      },
+      {
+        "name": "fused_recurrent_gated_delta_rule_packed_decode_kernel",
+        "stage1_self_device_ms": 1661.295841,
+        "stage2_self_device_ms": 746.946465,
+        "stage1_count": 6288,
+        "stage2_count": 6288
+      }
+    ],
+    "interpretation": "Stage-2 removes the decode-time Python scratch/QDQ path; remaining quantization-related operators include prefill work by design."
+  },
+  "nsight_compute_bs128": {
+    "source_artifacts": {
+      "stage1": "qwen38_gdn_stage1_bs128_ncu_stdout.csv",
+      "stage2": "qwen38_gdn_stage2_bs128_ncu_stdout.csv"
+    },
+    "kernel": "fused_recurrent_gated_delta_rule_packed_decode_kernel",
+    "gpu_clocks_locked": false,
+    "stage1": {
+      "duration_ns": 267872,
+      "dram_bytes": 787810048,
+      "dram_read_bytes": 405331456,
+      "dram_write_bytes": 382478592,
+      "l2_bytes": 1239277824,
+      "dram_throughput_percent": 87.73,
+      "sm_throughput_percent": 16.74,
+      "active_warps_percent": 11.67,
+      "long_scoreboard_stall_percent": 48.3
+    },
+    "stage2": {
+      "duration_ns": 120608,
+      "dram_bytes": 189928192,
+      "dram_read_bytes": 106495232,
+      "dram_write_bytes": 83432960,
+      "l2_bytes": 327047392,
+      "dram_throughput_percent": 46.99,
+      "sm_throughput_percent": 41.65,
+      "active_warps_percent": 11.77,
+      "long_scoreboard_stall_percent": 41.4
+    },
+    "ratios": {
+      "latency_speedup": 2.221014,
+      "dram_traffic_reduction": 4.147936,
+      "l2_traffic_reduction": 3.789291
+    },
+    "caveat": "One Nsight Compute capture per implementation with unlocked GPU clocks; use the values as profiler attribution, not repeated locked-clock latency statistics."
+  },
+  "stage3_selected_kernel_sweep": {
+    "source_artifact": "qwen38_stage3_kernel_tune.json",
+    "settings": {
+      "warmup": 20,
+      "repeat": 100,
+      "candidate_space": {
+        "block_v": [16, 32],
+        "num_warps": [1, 2, 4],
+        "num_stages": [1, 2, 3]
+      }
+    },
+    "stage2_launch": {
+      "block_v": 32,
+      "num_warps": 1,
+      "num_stages": 3
+    },
+    "stage3_launch": {
+      "batch_le_32": {
+        "block_v": 16,
+        "num_warps": 1,
+        "num_stages": 3
+      },
+      "batch_gt_32": {
+        "block_v": 32,
+        "num_warps": 2,
+        "num_stages": 1
+      }
+    },
+    "results": [
+      {
+        "batch_size": 1,
+        "stage2_eager_us": 30.05,
+        "stage3_eager_us": 28.563,
+        "eager_speedup": 1.052,
+        "stage2_cudagraph_us": 4.61,
+        "stage3_cudagraph_us": 3.413,
+        "cudagraph_speedup": 1.351
+      },
+      {
+        "batch_size": 32,
+        "stage2_eager_us": 28.403,
+        "stage3_eager_us": 26.65,
+        "eager_speedup": 1.066,
+        "stage2_cudagraph_us": 23.941,
+        "stage3_cudagraph_us": 21.292,
+        "cudagraph_speedup": 1.124
+      },
+      {
+        "batch_size": 64,
+        "stage2_eager_us": 66.141,
+        "stage3_eager_us": 50.39,
+        "eager_speedup": 1.313,
+        "stage2_cudagraph_us": 65.763,
+        "stage3_cudagraph_us": 49.605,
+        "cudagraph_speedup": 1.326
+      },
+      {
+        "batch_size": 128,
+        "stage2_eager_us": 125.917,
+        "stage3_eager_us": 94.306,
+        "eager_speedup": 1.335,
+        "stage2_cudagraph_us": 125.605,
+        "stage3_cudagraph_us": 93.402,
+        "cudagraph_speedup": 1.345
+      }
+    ]
+  }
+}

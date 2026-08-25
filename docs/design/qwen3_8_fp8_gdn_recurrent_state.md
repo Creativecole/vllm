@@ -97,11 +97,42 @@ dequantization, FP32 scratch operations, row-wise quantization, and indexed
 writeback around packed decode. Those operations disappear from the Stage-2
 decode trace; prefill quantization remains by design.
 
+The matched BS128 trace (`prompt_len=512`, `output_len=128`, one profiled eager
+run after one warmup) recorded these selected operator totals across the full
+profiled generation:
+
+| Operator | Stage 1 self-device time | Stage 2 self-device time | Stage 1 calls | Stage 2 calls |
+| --- | ---: | ---: | ---: | ---: |
+| `aten::gather` | 477.532 ms | 0 ms | 12,611 | 0 |
+| `aten::div` | 2189.874 ms | 18.811 ms | 13,056 | 480 |
+| `aten::amax` | 1439.813 ms | 14.481 ms | 6,528 | 240 |
+| `aten::index_copy_` | 1742.357 ms | 18.126 ms | 13,200 | 624 |
+| packed recurrent kernel | 1661.296 ms | 746.946 ms | 6,288 | 6,288 |
+
+The residual Stage-2 quantization-related calls include prefill processing,
+which is intentionally unchanged. These totals are attribution from one full
+profiled run, not per-kernel latency measurements.
+
 Nsight Compute measured the BS128 packed recurrent kernel at 267.872 us for
 Stage 1 and 120.608 us for Stage 2, a 2.221x kernel speedup. Measured DRAM
 traffic fell from about 751.3 MiB to 181.1 MiB (about 4.15x), and measured L2
 traffic fell about 3.79x. These are profiler measurements, not theoretical byte
-counts.
+counts. Exact counters, profiler totals, and the Stage-3 kernel sweep are in
+[`qwen3_8_fp8_gdn_h100_kernel_profile.json`](../assets/qwen3_8_fp8_gdn_h100_kernel_profile.json).
+
+| NCU metric | Stage 1 | Stage 2 | Change |
+| --- | ---: | ---: | ---: |
+| Kernel latency | 267.872 us | 120.608 us | 2.221x faster |
+| DRAM traffic | 751.314 MiB | 181.130 MiB | 4.148x lower |
+| L2 traffic | 1181.867 MiB | 311.897 MiB | 3.789x lower |
+| DRAM throughput | 87.73% | 46.99% | lower saturation |
+| SM throughput | 16.74% | 41.65% | higher utilization |
+| Active warps | 11.67% | 11.77% | approximately unchanged |
+| Long-scoreboard stall | 48.30% | 41.40% | lower, still material |
+
+GPU clocks were not locked for these single NCU captures. The counters support
+bottleneck attribution; the latency rows should not be interpreted as a
+repeated locked-clock microbenchmark distribution.
 
 Stage 1 reached 87.73% DRAM throughput. Stage 2 reached 46.99% DRAM throughput,
 41.65% SM throughput, about 11.77% active warps, and about 41.4% long-scoreboard

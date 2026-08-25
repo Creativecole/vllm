@@ -83,6 +83,22 @@ The final fixed dispatch is:
 No Triton autotuner runs in the serving path. FP32, FP16, and BF16 retain their
 original cache behavior and use the non-FP8 launch configuration.
 
+The controlled H100 sweep evaluated all 18 combinations of `BV={16,32}`,
+`num_warps={1,2,4}`, and `num_stages={1,2,3}` at the real
+`H=16, HV=48, K=128, V=128` geometry. The table compares the original Stage-2
+launch configuration with the selected Stage-3 dispatch:
+
+| Batch | Stage 2 eager | Stage 3 eager | Speedup | Stage 2 graph | Stage 3 graph | Speedup |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 30.050 us | 28.563 us | 1.052x | 4.610 us | 3.413 us | 1.351x |
+| 32 | 28.403 us | 26.650 us | 1.066x | 23.941 us | 21.292 us | 1.124x |
+| 64 | 66.141 us | 50.390 us | 1.313x | 65.763 us | 49.605 us | 1.326x |
+| 128 | 125.917 us | 94.306 us | 1.335x | 125.605 us | 93.402 us | 1.345x |
+
+These are isolated packed-kernel measurements. They establish the Stage-3
+kernel tuning result, not a material Stage-3 eager improvement for the full
+27B serving workload.
+
 ## Canonical H100 end-to-end result
 
 The final matched run used Qwen3.8-27B, prompt length 512, output length 128,
@@ -112,12 +128,21 @@ Nsight Compute measured the BS128 Stage-1 and Stage-2 packed recurrent kernels:
 | Metric | Stage 1 | Stage 2 | Change |
 | --- | ---: | ---: | ---: |
 | Kernel latency | 267.872 us | 120.608 us | 2.221x faster |
-| DRAM traffic | ~751.3 MiB | ~181.1 MiB | ~4.15x lower |
-| L2 traffic | — | — | ~3.79x lower |
+| DRAM traffic | 751.314 MiB | 181.130 MiB | 4.148x lower |
+| L2 traffic | 1181.867 MiB | 311.897 MiB | 3.789x lower |
+| DRAM throughput | 87.73% | 46.99% | bottleneck shifted |
+| SM throughput | 16.74% | 41.65% | higher compute utilization |
+| Active warps | 11.67% | 11.77% | approximately unchanged |
+| Long-scoreboard stall | 48.30% | 41.40% | lower, still material |
 
 These are measured profiler values, not theoretical traffic estimates.
 PyTorch Profiler confirms that the Stage-1 scratch/QDQ operations disappear
-from the Stage-2 packed decode path.
+from the Stage-2 packed decode path. The NCU values come from one capture per
+implementation with unlocked GPU clocks, so they are profiler attribution
+rather than repeated locked-clock latency statistics.
+
+The compact machine-readable kernel, Profiler, and NCU evidence is stored in
+[`docs/assets/qwen3_8_fp8_gdn_h100_kernel_profile.json`](docs/assets/qwen3_8_fp8_gdn_h100_kernel_profile.json).
 
 ## Quality smoke result
 
