@@ -205,6 +205,34 @@ error and used a 0.57 GiB graph pool. The graph-versus-eager numbers include
 vLLM compilation and launch-overhead reductions; they must not be attributed to
 the recurrent kernel alone.
 
+### Matched online serving against FP32 state
+
+A later saturated online-serving run compared this branch's
+`mamba_ssm_cache_dtype=float32` path with the final `fp8_e4m3fn` path. Both
+servers ran sequentially on the same H100 with BF16 model execution, TP1,
+normal CUDA Graph, prefix caching off, 512 input
+tokens, 128 output tokens, and 128 requests per concurrency point.
+
+| Concurrency | FP32 output tok/s | FP8 output tok/s | Speedup | FP32 p50 TPOT | FP8 p50 TPOT | FP32 p99 TPOT | FP8 p99 TPOT |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 46.35 | 46.43 | 1.002x | 20.95 ms | 20.79 ms | 20.96 ms | 20.80 ms |
+| 32 | 533.36 | 567.60 | 1.064x | 26.03 ms | 23.77 ms | 32.91 ms | 28.75 ms |
+| 64 | 1254.79 | 1306.01 | 1.041x | 35.48 ms | 32.61 ms | 45.78 ms | 40.63 ms |
+| 128 | 1273.20 | 1749.18 | 1.374x | 45.92 ms | 42.24 ms | 52.40 ms | 60.60 ms |
+
+The BS128 result combines a 37.4% throughput increase and lower median TPOT
+with a 15.6% p99 TPOT regression. P99 ITL also regressed, while p99 TTFT and
+p99 end-to-end latency improved. This is one `request_rate=inf` run and does
+not establish a general tail-latency improvement.
+
+At identical 0.9 GPU memory utilization, vLLM reported 346 versus 1241 GPU
+cache blocks and 157468 versus 231051 cache tokens. The block geometries differ
+by dtype, so the comparable capacity result is the 1.467x token increase, not
+the 3.587x raw block-count ratio. Maximum concurrency at 4096 tokens increased
+from 38.44x to 56.41x. These allocator measurements are distinct from the
+theoretical recurrent-state byte ratio. Compact evidence is stored in
+[`qwen3_8_fp8_gdn_online_serving_h100.json`](../assets/qwen3_8_fp8_gdn_online_serving_h100.json).
+
 ## Model-quality validation protocol
 
 The final quality comparison is implemented in

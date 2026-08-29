@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "source": {
+    "modal_app_id": "ap-K36IUmWSxQzU0hTRhVpYga",
+    "timestamp_utc": "2026-08-29T07:39:40Z",
+    "git_revision": "ab22b22dd0cc0a12e1378a370c61d04d2ea3c282",
+    "evidence_scope": "single matched H100 online-serving run"
+  },
+  "environment": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "python": "3.12.1",
+    "vllm": "0.27.1 with this branch overlaid",
+    "tensor_parallel_size": 1
+  },
+  "settings": {
+    "controlled_variable": "mamba_ssm_cache_dtype",
+    "state_dtypes": [
+      "float32",
+      "fp8_e4m3fn"
+    ],
+    "model_dtype": "bfloat16",
+    "prompt_len": 512,
+    "output_len": 128,
+    "num_prompts_per_concurrency": 128,
+    "concurrencies": [
+      1,
+      32,
+      64,
+      128
+    ],
+    "request_rate": "inf",
+    "num_warmups": 2,
+    "seed": 0,
+    "ignore_eos": true,
+    "temperature": 0,
+    "max_model_len": 4096,
+    "max_num_seqs": 128,
+    "gpu_memory_utilization": 0.9,
+    "prefix_caching": false,
+    "enforce_eager": false,
+    "cuda_graph": true
+  },
+  "capacity": {
+    "num_gpu_blocks": {
+      "float32": 346,
+      "fp8_e4m3fn": 1241,
+      "fp8_over_float32": 3.586705202312139
+    },
+    "kv_cache_size_tokens": {
+      "float32": 157468,
+      "fp8_e4m3fn": 231051,
+      "fp8_over_float32": 1.467288591967892
+    },
+    "kv_cache_max_concurrency_at_4096_tokens": {
+      "float32": 38.44444444444444,
+      "fp8_e4m3fn": 56.40909090909091,
+      "fp8_over_float32": 1.4672884918549658
+    }
+  },
+  "serving": [
+    {
+      "concurrency": 1,
+      "float32": {
+        "output_throughput_tok_s": 46.34854698461413,
+        "p50_ttft_ms": 100.38880700000163,
+        "p99_ttft_ms": 111.61368489005328,
+        "p50_tpot_ms": 20.949540377952466,
+        "p99_tpot_ms": 20.96073500275583,
+        "p50_itl_ms": 20.946782999970992,
+        "p99_itl_ms": 22.214954549957614,
+        "p50_e2el_ms": 2761.0238849999578,
+        "p99_e2el_ms": 2773.0064111700162
+      },
+      "fp8_e4m3fn": {
+        "output_throughput_tok_s": 46.427390107619466,
+        "p50_ttft_ms": 116.18818449994706,
+        "p99_ttft_ms": 124.37481428997218,
+        "p50_tpot_ms": 20.788605460629377,
+        "p99_tpot_ms": 20.79814221740191,
+        "p50_itl_ms": 20.791594999991503,
+        "p99_itl_ms": 21.915193349980207,
+        "p50_e2el_ms": 2756.474108500015,
+        "p99_e2el_ms": 2763.826447999977
+      },
+      "fp8_over_float32_output_throughput": 1.0017010915796671
+    },
+    {
+      "concurrency": 32,
+      "float32": {
+        "output_throughput_tok_s": 533.3566422339304,
+        "p50_ttft_ms": 1283.8977769999929,
+        "p99_ttft_ms": 13723.20449783003,
+        "p50_tpot_ms": 26.02623539370075,
+        "p99_tpot_ms": 32.906831711259514,
+        "p50_itl_ms": 25.279539500047576,
+        "p99_itl_ms": 28.61765164999497,
+        "p50_e2el_ms": 4608.670903500013,
+        "p99_e2el_ms": 17029.45353393
+      },
+      "fp8_e4m3fn": {
+        "output_throughput_tok_s": 567.5970644973708,
+        "p50_ttft_ms": 1403.4409419999747,
+        "p99_ttft_ms": 12636.579992610026,
+        "p50_tpot_ms": 23.771265082678287,
+        "p99_tpot_ms": 28.754815695354203,
+        "p50_itl_ms": 23.121165000020483,
+        "p99_itl_ms": 25.868697000009888,
+        "p50_e2el_ms": 4435.009030500055,
+        "p99_e2el_ms": 15678.412966139846
+      },
+      "fp8_over_float32_output_throughput": 1.0641979860230606
+    },
+    {
+      "concurrency": 64,
+      "float32": {
+        "output_throughput_tok_s": 1254.785829567704,
+        "p50_ttft_ms": 1969.04532100001,
+        "p99_ttft_ms": 2791.3171773300123,
+        "p50_tpot_ms": 35.4817051181104,
+        "p99_tpot_ms": 45.784446182913406,
+        "p50_itl_ms": 29.82871200003956,
+        "p99_itl_ms": 291.50819744995715,
+        "p50_e2el_ms": 6467.884438499994,
+        "p99_e2el_ms": 7581.5667597100355
+      },
+      "fp8_e4m3fn": {
+        "output_throughput_tok_s": 1306.0052487515504,
+        "p50_ttft_ms": 2035.4222359999312,
+        "p99_ttft_ms": 3248.412041869906,
+        "p50_tpot_ms": 32.605891433070965,
+        "p99_tpot_ms": 40.62799118661425,
+        "p50_itl_ms": 25.472623000041494,
+        "p99_itl_ms": 131.36412829990167,
+        "p50_e2el_ms": 6216.918384999985,
+        "p99_e2el_ms": 7855.376949539947
+      },
+      "fp8_over_float32_output_throughput": 1.0408192521599422
+    },
+    {
+      "concurrency": 128,
+      "float32": {
+        "output_throughput_tok_s": 1273.2022527158842,
+        "p50_ttft_ms": 3541.843209499973,
+        "p99_ttft_ms": 9480.539631939997,
+        "p50_tpot_ms": 45.92122162598373,
+        "p99_tpot_ms": 52.40146535125998,
+        "p50_itl_ms": 31.900014999962423,
+        "p99_itl_ms": 541.115194400021,
+        "p50_e2el_ms": 9372.759793999932,
+        "p99_e2el_ms": 12844.220642089984
+      },
+      "fp8_e4m3fn": {
+        "output_throughput_tok_s": 1749.177288917637,
+        "p50_ttft_ms": 3906.8020330000763,
+        "p99_ttft_ms": 5616.205653009988,
+        "p50_tpot_ms": 42.244287468504155,
+        "p99_tpot_ms": 60.6017671845666,
+        "p50_itl_ms": 29.415789999916342,
+        "p99_itl_ms": 682.1927954501689,
+        "p50_e2el_ms": 9272.29458599993,
+        "p99_e2el_ms": 9343.679194689974
+      },
+      "fp8_over_float32_output_throughput": 1.3738408687122916
+    }
+  ],
+  "caveats": [
+    "This is one matched run, not repeated locked-clock statistics.",
+    "request_rate=inf measures saturated serving and includes scheduler interactions.",
+    "FP32 and FP8 block counts use different physical block geometries; compare token capacity for an end-to-end capacity ratio.",
+    "At concurrency 128, FP8 improved throughput and TTFT/E2EL tails but regressed p99 TPOT and p99 ITL.",
+    "CUDA Graph gains are not attributable to the recurrent kernel alone."
+  ]
+}

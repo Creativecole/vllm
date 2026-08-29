@@ -121,6 +121,46 @@ only gains.
 Raw canonical results are stored in
 [`docs/assets/qwen3_8_fp8_gdn_h100_results.json`](docs/assets/qwen3_8_fp8_gdn_h100_results.json).
 
+## Matched online serving: FP32 state versus final FP8 state
+
+A separate H100 run compared this branch's existing FP32 recurrent-state path
+with the final FP8 recurrent-state path. The two servers ran sequentially on
+the same GPU with identical BF16 model execution, TP1, CUDA Graph, prefix
+caching off, prompt length 512, output length 128, and 128 requests per
+concurrency point.
+The only controlled serving variable was `mamba_ssm_cache_dtype`.
+
+| Concurrency | FP32 output tok/s | FP8 output tok/s | Speedup | FP32 p50 TPOT | FP8 p50 TPOT | FP32 p99 TPOT | FP8 p99 TPOT |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 46.35 | 46.43 | 1.002x | 20.95 ms | 20.79 ms | 20.96 ms | 20.80 ms |
+| 32 | 533.36 | 567.60 | 1.064x | 26.03 ms | 23.77 ms | 32.91 ms | 28.75 ms |
+| 64 | 1254.79 | 1306.01 | 1.041x | 35.48 ms | 32.61 ms | 45.78 ms | 40.63 ms |
+| 128 | 1273.20 | 1749.18 | 1.374x | 45.92 ms | 42.24 ms | 52.40 ms | 60.60 ms |
+
+At concurrency 128, FP8 increased output throughput by 37.4% and reduced
+median TPOT by 8.0%, but p99 TPOT regressed by 15.6%. Median ITL improved from
+31.90 to 29.42 ms while p99 ITL regressed from 541.12 to 682.19 ms. At the same
+point, p99 TTFT improved from 9480.54 to 5616.21 ms and p99 end-to-end latency
+improved from 12844.22 to 9343.68 ms. These mixed tail results reflect one
+saturated `request_rate=inf` run and scheduler interactions; they do not support
+a blanket tail-latency improvement claim.
+
+With the same `gpu_memory_utilization=0.9`, the allocator reported:
+
+| Capacity metric | FP32 state | FP8 state | Change |
+| --- | ---: | ---: | ---: |
+| GPU cache blocks (dtype-specific geometry) | 346 | 1241 | 3.587x |
+| Cache token capacity | 157468 | 231051 | 1.467x |
+| Maximum concurrency at 4096 tokens | 38.44x | 56.41x | 1.467x |
+
+Block counts use different dtype-dependent physical block geometries, so the
+3.587x block-count ratio is not itself a request-capacity multiplier. The token
+capacity and 4096-token concurrency rows are the comparable end-to-end capacity
+metrics. These values come from the vLLM cache configuration, not the 3.88x
+theoretical recurrent-state byte ratio. The compact machine-readable result is
+stored in
+[`docs/assets/qwen3_8_fp8_gdn_online_serving_h100.json`](docs/assets/qwen3_8_fp8_gdn_online_serving_h100.json).
+
 ## Kernel profiling
 
 Nsight Compute measured the BS128 Stage-1 and Stage-2 packed recurrent kernels:
@@ -214,6 +254,25 @@ VLLM_ENABLE_FLA_PACKED_RECURRENT_DECODE=1 \
   --warmup 2 \
   --repeat 5
 ```
+
+Run the matched online-serving benchmark directly:
+
+```bash
+MODEL="<local-checkpoint-path-or-model-id>"
+VLLM_ENABLE_FLA_PACKED_RECURRENT_DECODE=1 \
+.venv/bin/python benchmarks/qwen3_8_gdn_online_serving.py \
+  --model "$MODEL" \
+  --output-dir qwen38-online-serving \
+  --prompt-len 512 \
+  --output-len 128 \
+  --num-prompts 128 \
+  --concurrencies 1 32 64 128 \
+  --num-warmups 2
+```
+
+The Modal H100 wrapper used for the published run is
+[`benchmarks/modal/qwen3_8_gdn_online_serving.py`](benchmarks/modal/qwen3_8_gdn_online_serving.py).
+Its model path is configurable through `--model-path`.
 
 ## Scope and limitations
 
